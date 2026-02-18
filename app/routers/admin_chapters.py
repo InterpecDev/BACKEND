@@ -8,6 +8,8 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.book import Book
 from app.models.chapter import Chapter
+from app.schemas.admin_chapters import AdminChapterRowOut, ChapterStatusUpdateIn
+
 
 from app.schemas.admin_chapters import (
     AdminChapterRowOut,
@@ -17,6 +19,20 @@ from app.schemas.admin_chapters import (
 
 router = APIRouter(prefix="/admin", tags=["admin-chapters"])
 
+
+# ✅ SOLO ESTO AGREGAS (para que ya exista AssignEvaluatorIn cuando lo uses)
+from pydantic import BaseModel
+from datetime import datetime
+from app.models.dictamen import Dictamen  # ✅ ya tienes el model
+
+
+class AssignEvaluatorIn(BaseModel):
+    evaluator_email: str
+
+
+def _make_dictamen_folio():
+    now = datetime.now()
+    return f"DIC-{now.year}-{now.month:02d}-{int(now.timestamp()) % 100000:05d}"
 
 # =========================
 # Helpers (mismo estilo)
@@ -169,3 +185,72 @@ def add_correccion(
     db.commit()
 
     return {"ok": True}
+
+
+
+# =========================
+# POST /admin/chapters/{id}/assign
+# Asignar dictaminador por correo (debe existir en users y role=dictaminador)
+# =========================
+@router.post("/chapters/{chapter_id}/assign", response_model=AdminChapterRowOut)
+def assign_evaluator(
+    chapter_id: int,
+    payload: AssignEvaluatorIn,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    _require_editorial(db, user)
+
+    email = (payload.evaluator_email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Escribe el correo del dictaminador.")
+
+    # 1) buscar dictaminador en users
+    evaluator = (
+        db.query(User)
+        .filter(
+            User.email == email,
+            User.role == "dictaminador",
+            User.active == 1,
+        )
+        .first()
+    )
+    if not evaluator:
+        raise HTTPException(
+            status_code=400,
+            detail="No existe un dictaminador activo con ese correo.",
+        )
+
+    # 2) buscar capítulo
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Capítulo no encontrado")
+
+    # 3) asignar (usa tus columnas reales)
+    c.evaluator_id = int(evaluator.id)
+    c.evaluator_name = evaluator.name
+    c.evaluator_email = evaluator.email
+
+    # 4) actualizar status + fecha
+    c.status = "ASIGNADO_A_DICTAMINADOR"
+    c.updated_at = func.now()
+
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+
+    # 5) book_name para respuesta (como ya haces en update_status)
+    b = db.query(Book).filter(Book.id == c.book_id).first()
+
+    return AdminChapterRowOut(
+        id=int(c.id),
+        folio=None,  # (tú aún no tienes columna folio)
+        title=c.title,
+        book_id=int(c.book_id),
+        book_name=b.name if b else "",
+        author_name=c.author_name,
+        author_email=c.author_email,
+        status=c.status,
+        updated_at=str(c.updated_at),
+        evaluator_email=c.evaluator_email,
+    )
