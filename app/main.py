@@ -22,17 +22,17 @@ import app.models
 
 app = FastAPI()
 
-# ✅ CORS CORREGIDO - Agrega el puerto 5174 y permite todas las IPs locales
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173", 
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",  # ← AGREGAR ESTE (tu puerto actual)
-        "http://127.0.0.1:5174",  # ← AGREGAR ESTE
-        "http://192.168.1.26:5174",  # ← La IP de tu frontend (cámbiala)
-        "http://192.168.1.155:5174",  # ← La IP del backend (por si acaso)
-    ],
+allow_origins=[
+    "http://localhost:5173", 
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://192.168.1.152:5174",  
+    "http://192.168.1.76:8080",    
+    "http://192.168.1.152:5173",  
+],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
