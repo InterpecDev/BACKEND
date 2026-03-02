@@ -22,11 +22,6 @@ from app.routers import admin_dictamen_documento
 
 # app/main.py o donde tengas tus routers
 from app.routers import dictaminador
-
-# ... otros imports ...
-
-
-
 import app.models
 
 app = FastAPI()
@@ -40,7 +35,12 @@ allow_origins=[
     "http://127.0.0.1:5174",
     "http://192.168.1.152:5174",  
     "http://192.168.1.76:8080",    
-    "http://192.168.1.152:5173",  
+    "http://192.168.1.152:5173",
+    "http://192.168.1.26:8080",
+    "http://192.168.1.26:5173",
+    "https://frontend-6whf.vercel.app/login",
+    "https://frontend-6whf-git-main-luz1727s-projects.vercel.app/login",
+    "https://frontend-6whf-bnpneq3m6-luz1727s-projects.vercel.app/login"
 ],
     allow_credentials=True,
     allow_methods=["*"],
