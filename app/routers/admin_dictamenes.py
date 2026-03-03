@@ -183,5 +183,3 @@ def mark_signed(dictamen_id: int, db: Session = Depends(get_db), user=Depends(ge
         updatedAt=str(d.updated_at or d.created_at),
     )
     
-    
-    
