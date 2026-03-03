@@ -1,11 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
-
-from datetime import datetime
-from typing import Optional
 
 from app.db.session import get_db
 from app.core.deps import get_current_user
@@ -13,32 +9,44 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.book import Book
 from app.models.chapter import Chapter
+from app.schemas.admin_chapters import AdminChapterRowOut, ChapterStatusUpdateIn
+from app.schemas.admin_chapters import AdminChapterFolioUpdateIn
+from datetime import datetime, time
 from app.models.chapter_deadline import ChapterDeadline
-
-from app.models.dictamen import Dictamen
-from app.models.dictamen_criterio import DictamenCriterio
 
 from app.schemas.admin_chapters import (
     AdminChapterRowOut,
     ChapterStatusUpdateIn,
     CorreccionIn,
-    AdminChapterFolioUpdateIn,
-    EvaluacionUpsertIn,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin-chapters"])
 
 
-# =========================
-# Folio helper
-# =========================
+# ✅ Pydantic models para fechas
+from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional
+from app.models.dictamen import Dictamen  # ✅ ya tienes el model
+
+
+class AssignEvaluatorIn(BaseModel):
+    evaluator_email: str
+    deadline_at: Optional[str] = None  # NUEVO: formato YYYY-MM-DD
+
+
+class AssignEvaluatorWithDeadlineIn(BaseModel):
+    evaluator_email: str
+    deadline_at: str  # requerido para asignación con fecha
+    deadline_stage: Optional[str] = "DICTAMEN"
+
+
 def _make_dictamen_folio():
     now = datetime.now()
     return f"DIC-{now.year}-{now.month:02d}-{int(now.timestamp()) % 100000:05d}"
 
-
 # =========================
-# Helpers auth
+# Helpers (mismo estilo)
 # =========================
 def _user_id(db: Session, user_or_payload) -> int:
     if not isinstance(user_or_payload, dict):
@@ -77,54 +85,8 @@ def _require_editorial(db: Session, user_or_payload) -> User:
     return me
 
 
-# ✅ ESTO ES LO QUE TE “DIJERON QUE PEGARAS” (permiso dictaminador)
-def _require_dictaminador(db: Session, user_or_payload) -> User:
-    uid = _user_id(db, user_or_payload)
-    me = db.query(User).filter(User.id == uid).first()
-    if not me:
-        raise HTTPException(status_code=401, detail="Usuario no encontrado")
-    if me.role != "dictaminador":
-        raise HTTPException(status_code=403, detail="No autorizado (solo dictaminador)")
-    if getattr(me, "active", 1) != 1:
-        raise HTTPException(status_code=403, detail="Usuario inactivo")
-    return me
-
-
 # =========================
-# Inputs asignación con deadline
-# =========================
-class AssignEvaluatorIn(BaseModel):
-    evaluator_email: str
-    deadline_at: Optional[str] = None  # YYYY-MM-DD
-
-
-class AssignEvaluatorWithDeadlineIn(BaseModel):
-    evaluator_email: str
-    deadline_at: str
-    deadline_stage: Optional[str] = "DICTAMEN"
-
-
-class DeadlineUpdateIn(BaseModel):
-    deadline_at: str
-    deadline_stage: Optional[str] = "DICTAMEN"
-    note: Optional[str] = None
-
-
-class DeadlineHistoryOut(BaseModel):
-    id: int
-    stage: str
-    due_at: str
-    set_by_name: Optional[str] = None
-    set_by_email: Optional[str] = None
-    note: Optional[str] = None
-    created_at: str
-
-    class Config:
-        from_attributes = True
-
-
-# =========================
-# GET /admin/chapters
+# GET /admin/chapters (MODIFICADO: incluir campos de fechas)
 # =========================
 @router.get("/chapters", response_model=list[AdminChapterRowOut])
 def list_chapters(db: Session = Depends(get_db), user=Depends(get_current_user)):
@@ -133,7 +95,7 @@ def list_chapters(db: Session = Depends(get_db), user=Depends(get_current_user))
     rows = (
         db.query(
             Chapter.id,
-            Chapter.folio,
+            Chapter.folio, 
             Chapter.title,
             Chapter.status,
             Chapter.updated_at,
@@ -143,8 +105,11 @@ def list_chapters(db: Session = Depends(get_db), user=Depends(get_current_user))
             Chapter.author_email,
             Chapter.evaluator_email,
             Chapter.evaluator_name,
+            # NUEVO: incluir campos de fechas
             Chapter.deadline_at,
             Chapter.deadline_stage,
+            Chapter.deadline_set_at,
+            Chapter.deadline_set_by,
         )
         .join(Book, Book.id == Chapter.book_id)
         .order_by(Chapter.updated_at.desc(), Chapter.id.desc())
@@ -165,6 +130,7 @@ def list_chapters(db: Session = Depends(get_db), user=Depends(get_current_user))
                 status=r.status,
                 updated_at=str(r.updated_at),
                 evaluator_email=r.evaluator_email,
+                # NUEVO: incluir fechas en respuesta
                 deadline_at=str(r.deadline_at) if r.deadline_at else None,
                 deadline_stage=r.deadline_stage,
             )
@@ -208,6 +174,7 @@ def update_status(
         status=c.status,
         updated_at=str(c.updated_at),
         evaluator_email=c.evaluator_email,
+        # NUEVO: incluir fechas en respuesta
         deadline_at=str(c.deadline_at) if c.deadline_at else None,
         deadline_stage=c.deadline_stage,
     )
@@ -239,12 +206,12 @@ def add_correccion(
 
 
 # =========================
-# POST /admin/chapters/{id}/assign
+# POST /admin/chapters/{id}/assign (VERSIÓN MODIFICADA con fecha límite)
 # =========================
 @router.post("/chapters/{chapter_id}/assign", response_model=AdminChapterRowOut)
 def assign_evaluator(
     chapter_id: int,
-    payload: AssignEvaluatorIn,
+    payload: AssignEvaluatorIn,  # Ahora incluye deadline_at opcional
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -254,6 +221,7 @@ def assign_evaluator(
     if not email:
         raise HTTPException(status_code=400, detail="Escribe el correo del dictaminador.")
 
+    # 1) buscar dictaminador en users
     evaluator = (
         db.query(User)
         .filter(
@@ -264,41 +232,55 @@ def assign_evaluator(
         .first()
     )
     if not evaluator:
-        raise HTTPException(status_code=400, detail="No existe un dictaminador activo con ese correo.")
+        raise HTTPException(
+            status_code=400,
+            detail="No existe un dictaminador activo con ese correo.",
+        )
 
+    # 2) buscar capítulo
     c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="Capítulo no encontrado")
 
+    # 3) asignar dictaminador
     c.evaluator_id = int(evaluator.id)
     c.evaluator_name = evaluator.name
     c.evaluator_email = evaluator.email
+
+    # 4) actualizar status
     c.status = "ASIGNADO_A_DICTAMINADOR"
     c.updated_at = func.now()
 
+    # 5) NUEVO: guardar fecha límite si se proporcionó
     if payload.deadline_at:
         try:
+            # Convertir string a datetime
             deadline_date = datetime.strptime(payload.deadline_at, "%Y-%m-%d")
             c.deadline_at = deadline_date
-            c.deadline_stage = "DICTAMEN"
+            c.deadline_stage = "DICTAMEN"  # etapa por defecto
             c.deadline_set_at = datetime.now()
             c.deadline_set_by = _user_id(db, user)
 
+            # Guardar en historial de deadlines
             deadline_record = ChapterDeadline(
                 chapter_id=c.id,
                 stage="DICTAMEN",
                 due_at=deadline_date,
                 set_by=_user_id(db, user),
-                note="Fecha límite establecida al asignar dictaminador",
+                note="Fecha límite establecida al asignar dictaminador"
             )
             db.add(deadline_record)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
+            raise HTTPException(
+                status_code=400,
+                detail="Formato de fecha inválido. Use YYYY-MM-DD"
+            )
 
     db.add(c)
     db.commit()
     db.refresh(c)
 
+    # 6) book_name para respuesta
     b = db.query(Book).filter(Book.id == c.book_id).first()
 
     return AdminChapterRowOut(
@@ -312,13 +294,15 @@ def assign_evaluator(
         status=c.status,
         updated_at=str(c.updated_at),
         evaluator_email=c.evaluator_email,
+        # NUEVO: incluir fechas en respuesta
         deadline_at=str(c.deadline_at) if c.deadline_at else None,
         deadline_stage=c.deadline_stage,
     )
 
 
 # =========================
-# POST /admin/chapters/{id}/assign-with-deadline
+# NUEVO ENDPOINT: POST /admin/chapters/{id}/assign-with-deadline
+# Versión que requiere fecha límite (opcional, por si quieres forzar)
 # =========================
 @router.post("/chapters/{chapter_id}/assign-with-deadline", response_model=AdminChapterRowOut)
 def assign_evaluator_with_deadline(
@@ -333,24 +317,40 @@ def assign_evaluator_with_deadline(
     if not email:
         raise HTTPException(status_code=400, detail="Escribe el correo del dictaminador.")
 
+    if not payload.deadline_at:
+        raise HTTPException(status_code=400, detail="La fecha límite es requerida.")
+
+    # 1) buscar dictaminador
     evaluator = (
         db.query(User)
-        .filter(User.email == email, User.role == "dictaminador", User.active == 1)
+        .filter(
+            User.email == email,
+            User.role == "dictaminador",
+            User.active == 1,
+        )
         .first()
     )
     if not evaluator:
-        raise HTTPException(status_code=400, detail="No existe un dictaminador activo con ese correo.")
+        raise HTTPException(
+            status_code=400,
+            detail="No existe un dictaminador activo con ese correo.",
+        )
 
+    # 2) buscar capítulo
     c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="Capítulo no encontrado")
 
+    # 3) asignar dictaminador
     c.evaluator_id = int(evaluator.id)
     c.evaluator_name = evaluator.name
     c.evaluator_email = evaluator.email
+
+    # 4) actualizar status
     c.status = "ASIGNADO_A_DICTAMINADOR"
     c.updated_at = func.now()
 
+    # 5) guardar fecha límite
     try:
         deadline_date = datetime.strptime(payload.deadline_at, "%Y-%m-%d")
         c.deadline_at = deadline_date
@@ -358,16 +358,20 @@ def assign_evaluator_with_deadline(
         c.deadline_set_at = datetime.now()
         c.deadline_set_by = _user_id(db, user)
 
+        # Guardar en historial
         deadline_record = ChapterDeadline(
             chapter_id=c.id,
-            stage=c.deadline_stage,
+            stage=payload.deadline_stage or "DICTAMEN",
             due_at=deadline_date,
             set_by=_user_id(db, user),
-            note="Fecha límite establecida al asignar dictaminador",
+            note="Fecha límite establecida al asignar dictaminador"
         )
         db.add(deadline_record)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
+        raise HTTPException(
+            status_code=400,
+            detail="Formato de fecha inválido. Use YYYY-MM-DD"
+        )
 
     db.add(c)
     db.commit()
@@ -392,8 +396,14 @@ def assign_evaluator_with_deadline(
 
 
 # =========================
-# PATCH /admin/chapters/{id}/deadline
+# NUEVO ENDPOINT: PATCH /admin/chapters/{id}/deadline
+# Para actualizar solo la fecha límite
 # =========================
+class DeadlineUpdateIn(BaseModel):
+    deadline_at: str  # YYYY-MM-DD
+    deadline_stage: Optional[str] = "DICTAMEN"
+    note: Optional[str] = None
+
 @router.patch("/chapters/{chapter_id}/deadline", response_model=AdminChapterRowOut)
 def update_deadline(
     chapter_id: int,
@@ -409,21 +419,25 @@ def update_deadline(
 
     try:
         deadline_date = datetime.strptime(payload.deadline_at, "%Y-%m-%d")
+        
+        # Guardar fecha anterior para nota
         old_deadline = str(c.deadline_at) if c.deadline_at else "ninguna"
-
+        
+        # Actualizar capítulo
         c.deadline_at = deadline_date
         c.deadline_stage = payload.deadline_stage
         c.deadline_set_at = datetime.now()
         c.deadline_set_by = _user_id(db, user)
         c.updated_at = func.now()
 
+        # Guardar en historial
         note = payload.note or f"Fecha límite actualizada: {old_deadline} → {payload.deadline_at}"
         deadline_record = ChapterDeadline(
             chapter_id=c.id,
             stage=payload.deadline_stage,
             due_at=deadline_date,
             set_by=_user_id(db, user),
-            note=note,
+            note=note
         )
         db.add(deadline_record)
 
@@ -432,7 +446,10 @@ def update_deadline(
         db.refresh(c)
 
     except ValueError:
-        raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
+        raise HTTPException(
+            status_code=400,
+            detail="Formato de fecha inválido. Use YYYY-MM-DD"
+        )
 
     b = db.query(Book).filter(Book.id == c.book_id).first()
 
@@ -453,8 +470,23 @@ def update_deadline(
 
 
 # =========================
-# GET /admin/chapters/{id}/deadlines
+# NUEVO ENDPOINT: GET /admin/chapters/{id}/deadlines
+# Obtener historial de fechas límite
 # =========================
+from pydantic import BaseModel
+
+class DeadlineHistoryOut(BaseModel):
+    id: int
+    stage: str
+    due_at: str
+    set_by_name: Optional[str] = None
+    set_by_email: Optional[str] = None
+    note: Optional[str] = None
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
 @router.get("/chapters/{chapter_id}/deadlines", response_model=list[DeadlineHistoryOut])
 def get_deadline_history(
     chapter_id: int,
@@ -476,26 +508,30 @@ def get_deadline_history(
 
     result = []
     for d in deadlines:
-        setter_name = d.setter.name if getattr(d, "setter", None) else None
-        setter_email = d.setter.email if getattr(d, "setter", None) else None
+        setter_name = None
+        setter_email = None
+        if d.setter:
+            setter_name = d.setter.name
+            setter_email = d.setter.email
 
-        result.append(
-            DeadlineHistoryOut(
-                id=d.id,
-                stage=d.stage,
-                due_at=str(d.due_at),
-                set_by_name=setter_name,
-                set_by_email=setter_email,
-                note=d.note,
-                created_at=str(d.created_at),
-            )
-        )
+        result.append(DeadlineHistoryOut(
+            id=d.id,
+            stage=d.stage,
+            due_at=str(d.due_at),
+            set_by_name=setter_name,
+            set_by_email=setter_email,
+            note=d.note,
+            created_at=str(d.created_at)
+        ))
+
     return result
 
 
 # =========================
-# PATCH /admin/chapters/{id}/folio
+# PATCH /admin/chapters/{id}/folio (SIN CAMBIOS, solo actualizar response)
 # =========================
+from sqlalchemy.exc import IntegrityError
+
 @router.patch("/chapters/{chapter_id}/folio", response_model=AdminChapterRowOut)
 def update_chapter_folio(
     chapter_id: int,
@@ -537,193 +573,7 @@ def update_chapter_folio(
         status=c.status,
         updated_at=str(c.updated_at),
         evaluator_email=getattr(c, "evaluator_email", None),
+        # NUEVO: incluir fechas en respuesta
         deadline_at=str(c.deadline_at) if c.deadline_at else None,
         deadline_stage=c.deadline_stage,
     )
-
-
-# =========================================================
-# ✅✅ EVALUACIÓN (DICTAMINADOR) - LO QUE TE FALTABA
-# =========================================================
-
-@router.get("/chapters/{chapter_id}/evaluacion")
-def get_evaluacion_actual(
-    chapter_id: int,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    """
-    Devuelve la evaluación del dictaminador asignado (si existe),
-    para precargar tu formulario del frontend.
-    """
-    # Permitir editorial o dictaminador
-    me_dict = None
-    try:
-        _require_editorial(db, user)
-    except HTTPException:
-        me_dict = _require_dictaminador(db, user)
-
-    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
-    if not c:
-        raise HTTPException(status_code=404, detail="Capítulo no encontrado")
-
-    # dictaminador solo ve el suyo y si está asignado
-    if me_dict:
-        if not c.evaluator_id or int(c.evaluator_id) != int(me_dict.id):
-            raise HTTPException(status_code=403, detail="Este capítulo no está asignado a tu usuario")
-
-    # buscar dictamen por evaluador asignado
-    evaluador_id = int(me_dict.id) if me_dict else (int(c.evaluator_id) if c.evaluator_id else None)
-    if not evaluador_id:
-        return {"exists": False, "data": None}
-
-    d = (
-        db.query(Dictamen)
-        .filter(Dictamen.chapter_id == int(chapter_id), Dictamen.evaluador_id == evaluador_id)
-        .first()
-    )
-    if not d:
-        return {"exists": False, "data": None}
-
-    criterios = (
-        db.query(DictamenCriterio)
-        .filter(DictamenCriterio.dictamen_id == int(d.id))
-        .order_by(DictamenCriterio.id.asc())
-        .all()
-    )
-
-    return {
-        "exists": True,
-        "data": {
-            "dictamen_id": int(d.id),
-            "folio": d.folio,
-            "tipo": d.tipo,
-            "promedio": d.promedio,
-            "decision": d.decision,
-            "comentarios": d.comentarios,
-            "conflicto_interes": d.conflicto_interes,
-            "status": d.status,
-            "criterios": [{"criterio": x.criterio, "value": x.value} for x in criterios],
-        },
-    }
-
-
-@router.post("/chapters/{chapter_id}/evaluacion/upsert")
-def upsert_evaluacion(
-    chapter_id: int,
-    payload: EvaluacionUpsertIn,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    """
-    Crea o actualiza evaluación (dictamen + criterios).
-    - Dictaminador: solo si está asignado al capítulo
-    - Editorial: permitido (si quieres), usando evaluator_id del capítulo
-    """
-    me_dict = None
-    me_edit = None
-
-    try:
-        me_edit = _require_editorial(db, user)
-    except HTTPException:
-        me_dict = _require_dictaminador(db, user)
-
-    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
-    if not c:
-        raise HTTPException(status_code=404, detail="Capítulo no encontrado")
-
-    # dictaminador: debe ser el asignado
-    if me_dict:
-        if not c.evaluator_id or int(c.evaluator_id) != int(me_dict.id):
-            raise HTTPException(status_code=403, detail="Este capítulo no está asignado a tu usuario")
-
-    evaluador_id = int(me_dict.id) if me_dict else (int(c.evaluator_id) if c.evaluator_id else None)
-    if not evaluador_id:
-        raise HTTPException(status_code=400, detail="El capítulo no tiene dictaminador asignado")
-
-    # 1) Obtener o crear dictamen (por UNIQUE chapter_id+evaluador_id)
-    d = (
-        db.query(Dictamen)
-        .filter(Dictamen.chapter_id == int(chapter_id), Dictamen.evaluador_id == int(evaluador_id))
-        .first()
-    )
-
-    if d and getattr(d, "status", None) == "FIRMADO":
-        raise HTTPException(status_code=409, detail="El dictamen ya está FIRMADO y no se puede modificar")
-
-    if not d:
-        d = Dictamen(
-            folio=_make_dictamen_folio(),
-            chapter_id=int(chapter_id),
-            evaluador_id=int(evaluador_id),
-            status="BORRADOR",
-            created_at=datetime.now(),
-        )
-        db.add(d)
-        db.flush()  # d.id
-
-    # 2) Actualizar campos
-    if payload.tipo is not None:
-        d.tipo = payload.tipo.strip() if payload.tipo else None
-
-    if payload.decision is not None:
-        d.decision = payload.decision
-
-    if payload.comentarios is not None:
-        d.comentarios = payload.comentarios
-
-    if payload.conflicto_interes is not None:
-        d.conflicto_interes = payload.conflicto_interes
-
-    # 3) Reemplazar criterios
-    db.query(DictamenCriterio).filter(DictamenCriterio.dictamen_id == int(d.id)).delete(synchronize_session=False)
-
-    total = 0
-    count = 0
-
-    for it in (payload.criterios or []):
-        crit_name = (it.criterio or "").strip()
-        if not crit_name:
-            continue
-
-        val = int(it.value)
-        if val < 1 or val > 5:
-            raise HTTPException(status_code=400, detail="Cada criterio debe tener value entre 1 y 5")
-
-        total += val
-        count += 1
-
-        db.add(
-            DictamenCriterio(
-                dictamen_id=int(d.id),
-                criterio=crit_name,
-                value=val,
-            )
-        )
-
-    d.promedio = (total / count) if count > 0 else None
-
-    # 4) Actualizar status del capítulo según decision (opcional pero recomendado)
-    if payload.decision:
-        if payload.decision == "APROBADO":
-            c.status = "APROBADO"
-        elif payload.decision == "CORRECCIONES":
-            c.status = "CORRECCIONES_SOLICITADAS_A_AUTOR"
-        elif payload.decision == "RECHAZADO":
-            c.status = "RECHAZADO"
-
-        c.updated_at = func.now()
-        db.add(c)
-
-    db.add(d)
-    db.commit()
-    db.refresh(d)
-
-    return {
-        "ok": True,
-        "dictamen_id": int(d.id),
-        "folio": d.folio,
-        "promedio": d.promedio,
-        "decision": d.decision,
-        "status": d.status,
-    }

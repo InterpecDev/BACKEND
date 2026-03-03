@@ -1,28 +1,23 @@
 from pydantic import BaseModel
-from typing import Optional, Literal, List
+from typing import Optional, Literal
 
-# =========================
-# Status completos
-# =========================
+# Versión completa con TODOS los status (los viejos y los nuevos)
 ChapterStatus = Literal[
     "RECIBIDO",
     "ASIGNADO_A_DICTAMINADOR",
-    "ENVIADO_A_DICTAMINADOR",
-    "EN_REVISION_DICTAMINADOR",
-    "CORRECCIONES_SOLICITADAS_A_AUTOR",
-    "CORRECCIONES",
+    "ENVIADO_A_DICTAMINADOR",           # ← NUEVO
+    "EN_REVISION_DICTAMINADOR",          # ← NUEVO
+    "CORRECCIONES_SOLICITADAS_A_AUTOR",  # ← NUEVO
+    "CORRECCIONES",                      # ← viejo
     "REENVIADO_POR_AUTOR",
-    "REVISADO_POR_EDITORIAL",
-    "LISTO_PARA_FIRMA",
-    "FIRMADO",
-    "EN_REVISION",
+    "REVISADO_POR_EDITORIAL",            # ← NUEVO
+    "LISTO_PARA_FIRMA",                   # ← NUEVO
+    "FIRMADO",                            # ← NUEVO
+    "EN_REVISION",                        # ← viejo
     "APROBADO",
     "RECHAZADO",
 ]
 
-# =========================
-# Respuestas Admin Chapters
-# =========================
 class AdminChapterRowOut(BaseModel):
     id: int
     folio: Optional[str] = None
@@ -31,42 +26,21 @@ class AdminChapterRowOut(BaseModel):
     book_name: str
     author_name: str
     author_email: str
-    status: ChapterStatus
+    status: ChapterStatus  # ← Usa la versión completa
     updated_at: str
-    evaluator_email: Optional[str] = None
+    evaluator_email: Optional[str] = None 
     deadline_at: Optional[str] = None
     deadline_stage: Optional[str] = None
 
     class Config:
         from_attributes = True
 
-
 class ChapterStatusUpdateIn(BaseModel):
-    status: ChapterStatus
+    status: ChapterStatus  # ← Usa la versión completa
 
 
 class CorreccionIn(BaseModel):
     comment: str
 
-
 class AdminChapterFolioUpdateIn(BaseModel):
     folio: str
-
-
-# =========================
-# ✅ Evaluación / Dictamen (Schemas)
-# =========================
-DecisionType = Literal["APROBADO", "CORRECCIONES", "RECHAZADO"]
-
-
-class EvaluacionCriterioIn(BaseModel):
-    criterio: str
-    value: int  # 1..5
-
-
-class EvaluacionUpsertIn(BaseModel):
-    tipo: Optional[str] = None
-    criterios: Optional[List[EvaluacionCriterioIn]] = None
-    decision: Optional[DecisionType] = None
-    comentarios: Optional[str] = None
-    conflicto_interes: Optional[str] = None  # Ej: "NO", "SI (explicar...)"
