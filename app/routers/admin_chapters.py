@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from app.db.session import get_db
 from app.core.deps import get_current_user
@@ -8,10 +9,13 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.book import Book
 from app.models.chapter import Chapter
+from app.models.chapter_version import ChapterVersion
+from app.models.dictamen import Dictamen
+from app.models.chapter_history import ChapterHistory
+from app.models.chapter_deadline import ChapterDeadline
 from app.schemas.admin_chapters import AdminChapterRowOut, ChapterStatusUpdateIn
 from app.schemas.admin_chapters import AdminChapterFolioUpdateIn
 from datetime import datetime, time
-from app.models.chapter_deadline import ChapterDeadline
 
 from app.schemas.admin_chapters import (
     AdminChapterRowOut,
@@ -85,7 +89,7 @@ def _require_editorial(db: Session, user_or_payload) -> User:
 
 
 # =========================
-# GET /admin/chapters (MODIFICADO: incluir campos de fechas)
+# GET /admin/chapters (listado)
 # =========================
 @router.get("/chapters", response_model=list[AdminChapterRowOut])
 def list_chapters(db: Session = Depends(get_db), user=Depends(get_current_user)):
@@ -135,6 +139,141 @@ def list_chapters(db: Session = Depends(get_db), user=Depends(get_current_user))
             )
         )
     return out
+
+
+# =========================
+# GET /admin/chapters/{chapter_id} - DETALLE COMPLETO DEL CAPÍTULO
+# =========================
+@router.get("/chapters/{chapter_id}")
+def get_chapter_detail(
+    chapter_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    _require_editorial(db, user)
+    
+    # Obtener capítulo con todas las relaciones
+    c = (
+        db.query(Chapter)
+        .options(
+            joinedload(Chapter.book),
+            joinedload(Chapter.versions),
+            joinedload(Chapter.dictamenes).joinedload(Dictamen.evaluador),
+            joinedload(Chapter.history),
+        )
+        .filter(Chapter.id == chapter_id)
+        .first()
+    )
+    
+    if not c:
+        raise HTTPException(status_code=404, detail="Capítulo no encontrado")
+    
+    # Obtener el libro
+    book = c.book
+    
+    # Versiones
+    versions = []
+    for v in c.versions or []:
+        versions.append({
+            "id": v.id,
+            "version_label": v.version_label,
+            "file_name": v.file_name,
+            "file_path": v.file_path,
+            "note": v.note,
+            "uploaded_at": v.uploaded_at,
+            "uploaded_by": "autor"  # Ajustar según corresponda
+        })
+    
+    # Dictámenes históricos
+    dictamenes = []
+    for d in c.dictamenes or []:
+        dictamenes.append({
+            "id": d.id,
+            "folio": d.folio,
+            "evaluator_name": d.evaluador.name if d.evaluador else None,
+            "tipo": d.tipo,
+            "promedio": d.promedio,
+            "decision": d.decision,
+            "status": d.status,
+            "created_at": d.created_at,
+            "firmado": d.status == "FIRMADO"
+        })
+    
+    # Dictamen actual (el más reciente)
+    dictamen_actual = None
+    if c.dictamenes:
+        # Ordenar por fecha de creación para obtener el último
+        dictamenes_ordenados = sorted(c.dictamenes, key=lambda x: x.created_at, reverse=True)
+        if dictamenes_ordenados:
+            d = dictamenes_ordenados[0]
+            
+            # Obtener criterios del dictamen si existen
+            criterios = []
+            if hasattr(d, 'criterios') and d.criterios:
+                for criterio in d.criterios:
+                    criterios.append({
+                        "id": criterio.id,
+                        "nombre": criterio.criterio,
+                        "puntaje": criterio.value
+                    })
+            
+            dictamen_actual = {
+                "id": d.id,
+                "folio": d.folio,
+                "evaluador_id": d.evaluador_id,
+                "evaluador_nombre": d.evaluador.name if d.evaluador else None,
+                "evaluador_email": d.evaluador.email if d.evaluador else None,
+                "tipo": d.tipo,
+                "titulo": c.title,
+                "criterios": criterios,
+                "promedio": d.promedio,
+                "decision": d.decision,
+                "comentarios": d.comentarios,
+                "conflictos_interes": d.conflicto_interes,
+                "fecha_evaluacion": d.created_at,
+                "fecha_firma": d.signed_at,
+                "firmado": d.status == "FIRMADO",
+                "archivo_firma": d.signed_pdf_path
+            }
+    
+    # Historial
+    history = []
+    for h in c.history or []:
+        history.append({
+            "id": h.id,
+            "at": h.at,
+            "by": h.by,
+            "action": h.action,
+            "detail": h.detail
+        })
+    
+    # Evaluación actual (puede ser el mismo dictamen)
+    evaluacion_actual = dictamen_actual
+    
+    # Construir respuesta completa
+    return {
+        "id": c.id,
+        "folio": c.folio,
+        "title": c.title,
+        "book": {
+            "id": book.id if book else None,
+            "name": book.name if book else None
+        },
+        "book_name": book.name if book else None,
+        "author_name": c.author_name,
+        "author_email": c.author_email,
+        "status": c.status,
+        "updated_at": c.updated_at,
+        "evaluator_name": c.evaluator_name,
+        "evaluator_email": c.evaluator_email,
+        "deadline_at": c.deadline_at,
+        "deadline_stage": c.deadline_stage,
+        "versions": versions,
+        "dictamenes": dictamenes,
+        "dictamen_actual": dictamen_actual,
+        "history": history,
+        "evaluacion_actual": evaluacion_actual
+    }
 
 
 # =========================
@@ -205,12 +344,12 @@ def add_correccion(
 
 
 # =========================
-# POST /admin/chapters/{id}/assign (VERSIÓN MODIFICADA con fecha límite)
+# POST /admin/chapters/{id}/assign
 # =========================
 @router.post("/chapters/{chapter_id}/assign", response_model=AdminChapterRowOut)
 def assign_evaluator(
     chapter_id: int,
-    payload: AssignEvaluatorIn,  # Ahora incluye deadline_at opcional
+    payload: AssignEvaluatorIn,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -300,8 +439,7 @@ def assign_evaluator(
 
 
 # =========================
-# NUEVO ENDPOINT: POST /admin/chapters/{id}/assign-with-deadline
-# Versión que requiere fecha límite (opcional, por si quieres forzar)
+# POST /admin/chapters/{id}/assign-with-deadline
 # =========================
 @router.post("/chapters/{chapter_id}/assign-with-deadline", response_model=AdminChapterRowOut)
 def assign_evaluator_with_deadline(
@@ -395,8 +533,7 @@ def assign_evaluator_with_deadline(
 
 
 # =========================
-# NUEVO ENDPOINT: PATCH /admin/chapters/{id}/deadline
-# Para actualizar solo la fecha límite
+# PATCH /admin/chapters/{id}/deadline
 # =========================
 class DeadlineUpdateIn(BaseModel):
     deadline_at: str  # YYYY-MM-DD
@@ -469,11 +606,8 @@ def update_deadline(
 
 
 # =========================
-# NUEVO ENDPOINT: GET /admin/chapters/{id}/deadlines
-# Obtener historial de fechas límite
+# GET /admin/chapters/{id}/deadlines - HISTORIAL DE FECHAS LÍMITE
 # =========================
-from pydantic import BaseModel
-
 class DeadlineHistoryOut(BaseModel):
     id: int
     stage: str
@@ -527,7 +661,7 @@ def get_deadline_history(
 
 
 # =========================
-# PATCH /admin/chapters/{id}/folio (SIN CAMBIOS, solo actualizar response)
+# PATCH /admin/chapters/{id}/folio
 # =========================
 from sqlalchemy.exc import IntegrityError
 

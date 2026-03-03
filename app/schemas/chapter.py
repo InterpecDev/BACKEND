@@ -1,7 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, Literal
-from datetime import datetime
 
 # ✅ Versión extendida con TODOS los status
 ChapterStatus = Literal[
@@ -26,14 +25,8 @@ class ChapterOut(BaseModel):
     author_id: int
     title: str
     status: ChapterStatus  # ← Ahora acepta todos
-    #updated_at: datetime
+    updated_at: datetime
     file_path: Optional[str] = None
-    
-     # ✅ CAMBIO: datetime para que FastAPI lo serialice a ISO automáticamente
-    updated_at: Optional[datetime] = None
-    # ✅ CAMBIO: datetime para que no explote
-    author_deadline_at: Optional[datetime] = None
-
 
     class Config:
         from_attributes = True

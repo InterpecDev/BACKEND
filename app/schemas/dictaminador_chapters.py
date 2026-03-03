@@ -1,7 +1,7 @@
 from pydantic import BaseModel
-from datetime import datetime
 from typing import Optional, Literal
-from datetime import datetime
+from datetime import datetime  # ✅ agrega esto
+
 
 # ✅ Versión extendida con TODOS los status
 ChapterStatus = Literal[
@@ -20,20 +20,31 @@ ChapterStatus = Literal[
     "RECHAZADO",
 ]
 
-class ChapterOut(BaseModel):
+class DictChapterRowOut(BaseModel):
     id: int
-    book_id: int
-    author_id: int
     title: str
     status: ChapterStatus  # ← Ahora acepta todos
-    #updated_at: datetime
+    updated_at: str
+
+    book_name: Optional[str] = None
+    author_name: Optional[str] = None
+    author_email: Optional[str] = None
+    # ✅ Archivo original
     file_path: Optional[str] = None
+
+    # ✅ NUEVO: versión corregida reenviada por el autor
+    corrected_file_path: Optional[str] = None
+    corrected_updated_at: Optional[str] = None
     
-     # ✅ CAMBIO: datetime para que FastAPI lo serialice a ISO automáticamente
-    updated_at: Optional[datetime] = None
-    # ✅ CAMBIO: datetime para que no explote
-    author_deadline_at: Optional[datetime] = None
-
-
+    deadline_at: Optional[str] = None
+    deadline_stage: Optional[str] = None
+     # ✅ NUEVO: fecha límite que dictaminador asigna al autor
+    author_deadline_at: Optional[str] = None
+    
     class Config:
         from_attributes = True
+
+class DictChapterStatusUpdateIn(BaseModel):
+    status: ChapterStatus  # ← Ahora acepta todos
+    comment: Optional[str] = None
+    author_deadline_at: Optional[datetime] = None

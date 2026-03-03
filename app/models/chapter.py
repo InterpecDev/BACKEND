@@ -3,7 +3,6 @@ from sqlalchemy import Column, BigInteger, String, DateTime, ForeignKey, Enum
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 from sqlalchemy import Column, String
-from sqlalchemy import Column, DateTime
 
 
 CHAPTER_STATUSES = (
@@ -55,15 +54,6 @@ class Chapter(Base):
 
     # (opcional) relación al usuario que la puso
     deadline_setter = relationship("User", foreign_keys=[deadline_set_by])
-    
-        # ✅ DEADLINE DICTAMINADOR -> AUTOR (nuevo, independiente)
-    author_deadline_at = Column(DateTime, nullable=True)
-    
-    author_deadline_set_at = Column(DateTime, nullable=True)
-    author_deadline_set_by = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-
-    # (opcional) relación al usuario que la puso (dictaminador)
-    author_deadline_setter = relationship("User", foreign_keys=[author_deadline_set_by])
     
 
     folio = Column(String(50), nullable=True, unique=True, index=True)
