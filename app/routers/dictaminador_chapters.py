@@ -121,6 +121,13 @@ def list_my_assigned_chapters(db: Session = Depends(get_db), user=Depends(get_cu
             else None
         ),
         deadline_stage=getattr(ch, "deadline_stage", None),
+        
+        # ✅ NUEVO (NO TOCA deadline_at)
+        author_deadline_at=(
+            ch.author_deadline_at.isoformat()
+            if getattr(ch, "author_deadline_at", None)
+            else None
+        ),
     )
 )
 
@@ -157,6 +164,12 @@ def update_my_chapter_status(
         raise HTTPException(status_code=400, detail="Escribe el comentario para Correcciones/Rechazado")
 
     ch.status = new_status
+    
+    # ✅ NUEVO: guardar fecha límite dictaminador -> autor
+    if payload.author_deadline_at is not None:
+        ch.author_deadline_at = payload.author_deadline_at
+        ch.author_deadline_set_at = datetime.utcnow()
+        ch.author_deadline_set_by = int(me.id)
 
     # ✅ Guardar comentario como Dictamen
     if comment:
@@ -216,6 +229,13 @@ def update_my_chapter_status(
             else None
         ),
         deadline_stage=getattr(ch, "deadline_stage", None),
+        
+        # ✅ NUEVO
+        author_deadline_at=(
+            ch.author_deadline_at.isoformat()
+            if getattr(ch, "author_deadline_at", None)
+            else None
+        ),
     )
 
 
