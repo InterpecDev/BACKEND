@@ -38,7 +38,7 @@ class DictChapterRowOut(BaseModel):
     
     deadline_at: Optional[str] = None
     deadline_stage: Optional[str] = None
-     # ✅ NUEVO: fecha límite que dictaminador asigna al autor
+    # ✅ NUEVO: fecha límite que dictaminador asigna al autor
     author_deadline_at: Optional[str] = None
     
     class Config:
