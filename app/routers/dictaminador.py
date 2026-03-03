@@ -1,17 +1,23 @@
+# app/routers/dictaminador.py
+import os
+from datetime import datetime
+from typing import Optional, List
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from datetime import datetime, date
-from typing import List, Optional
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.chapter import Chapter
 from app.models.book import Book
+from app.models.chapter_history import ChapterHistory
 
 router = APIRouter(prefix="/dictaminador", tags=["dictaminador"])
+
 
 # =========================
 # Schemas
@@ -21,26 +27,33 @@ class DictaminadorChapterOut(BaseModel):
     title: str
     status: str
     updated_at: str
+
     file_path: Optional[str] = None
     book_name: Optional[str] = None
     author_name: Optional[str] = None
     author_email: Optional[str] = None
-    
-    # ✅ NUEVO: campos de fecha límite
+
+    # editorial -> dictaminador
     deadline_at: Optional[str] = None
     deadline_stage: Optional[str] = None
-    days_remaining: Optional[int] = None
-    is_overdue: Optional[bool] = False
-    
+
+    # dictaminador -> autor  ✅ NUEVO
+    author_deadline_at: Optional[str] = None
+
     class Config:
         from_attributes = True
+
 
 class StatusUpdateIn(BaseModel):
     status: str
     comment: Optional[str] = None
 
+    # dictaminador -> autor ✅ NUEVO (si viene, se guarda)
+    author_deadline_at: Optional[str] = None  # ejemplo: "2026-03-10T23:59:59"
+
+
 # =========================
-# Helpers (mismo estilo que admin_chapters.py)
+# Helpers auth (tu mismo estilo)
 # =========================
 def _user_id(db: Session, user_or_payload) -> int:
     if not isinstance(user_or_payload, dict):
@@ -68,6 +81,7 @@ def _user_id(db: Session, user_or_payload) -> int:
 
     raise HTTPException(status_code=401, detail="Token inválido")
 
+
 def _require_dictaminador(db: Session, user_or_payload) -> User:
     uid = _user_id(db, user_or_payload)
     me = db.query(User).filter(User.id == uid).first()
@@ -77,251 +91,239 @@ def _require_dictaminador(db: Session, user_or_payload) -> User:
         raise HTTPException(status_code=403, detail="No autorizado (solo dictaminador)")
     return me
 
+
+# =========================
+# Helpers archivos (Railway)
+# =========================
+def _guess_media_type(ext: str) -> str:
+    ext = (ext or "").lower()
+    if ext == ".pdf":
+        return "application/pdf"
+    if ext == ".doc":
+        return "application/msword"
+    if ext == ".docx":
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return "application/octet-stream"
+
+
+def _pick_latest_file_path(ch: Chapter) -> str:
+    corrected = (getattr(ch, "corrected_file_path", None) or "").strip()
+    if corrected:
+        return corrected
+    return (getattr(ch, "file_path", "") or "").strip()
+
+
+def _resolve_physical_path(path_from_db: str) -> str:
+    """
+    Si guardas rutas tipo:
+      - "storage/chapters/x.docx"
+      - "/app/storage/chapters/x.docx"
+    las resolvemos a una ruta real del contenedor.
+    """
+    p = (path_from_db or "").replace("\\", "/").strip()
+    if not p:
+        return ""
+
+    # si ya es absoluta, la dejamos
+    if os.path.isabs(p):
+        return p
+
+    # si es relativa, la hacemos relativa al cwd
+    return os.path.join(os.getcwd(), p)
+
+
 # =========================
 # GET /dictaminador/chapters
 # =========================
 @router.get("/chapters", response_model=List[DictaminadorChapterOut])
-def list_my_chapters(
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user)
-):
-    """Obtiene los capítulos asignados al dictaminador actual"""
-    
-    dictaminador = _require_dictaminador(db, user)
-    
-    chapters = (
-        db.query(
-            Chapter.id,
-            Chapter.title,
-            Chapter.status,
-            Chapter.updated_at,
-            Chapter.file_path,
-            Chapter.book_id,
-            Book.name.label("book_name"),
-            Chapter.author_name,
-            Chapter.author_email,
-            Chapter.deadline_at,
-            Chapter.deadline_stage,
-        )
+def list_my_chapters(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    me = _require_dictaminador(db, user)
+
+    rows = (
+        db.query(Chapter, Book)
         .join(Book, Book.id == Chapter.book_id)
-        .filter(Chapter.evaluator_id == dictaminador.id)
-        .order_by(
-            Chapter.deadline_at.asc().nulls_last(),
-            Chapter.updated_at.desc()
-        )
+        .filter(Chapter.evaluator_id == me.id)
+        .order_by(Chapter.updated_at.desc(), Chapter.id.desc())
         .all()
     )
-    
-    result = []
-    today = date.today()
-    
-    for c in chapters:
-        days_remaining = None
-        is_overdue = False
-        
-        if c.deadline_at:
-            if isinstance(c.deadline_at, datetime):
-                deadline_date = c.deadline_at.date()
-            else:
-                deadline_date = c.deadline_at
-            days_remaining = (deadline_date - today).days
-            is_overdue = days_remaining < 0
-        
-        result.append(DictaminadorChapterOut(
-            id=c.id,
-            title=c.title,
-            status=c.status,
-            updated_at=str(c.updated_at),
-            file_path=c.file_path,
-            book_name=c.book_name,
-            author_name=c.author_name,
-            author_email=c.author_email,
-            deadline_at=str(c.deadline_at) if c.deadline_at else None,
-            deadline_stage=c.deadline_stage,
-            days_remaining=days_remaining,
-            is_overdue=is_overdue
-        ))
-    
-    return result
 
-# =========================
-# GET /dictaminador/chapters/{chapter_id}
-# =========================
-@router.get("/chapters/{chapter_id}", response_model=DictaminadorChapterOut)
-def get_chapter_detail(
-    chapter_id: int,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user)
-):
-    """Obtiene detalle de un capítulo específico"""
-    
-    dictaminador = _require_dictaminador(db, user)
-    
-    c = (
-        db.query(
-            Chapter.id,
-            Chapter.title,
-            Chapter.status,
-            Chapter.updated_at,
-            Chapter.file_path,
-            Chapter.book_id,
-            Book.name.label("book_name"),
-            Chapter.author_name,
-            Chapter.author_email,
-            Chapter.deadline_at,
-            Chapter.deadline_stage,
+    out: List[DictaminadorChapterOut] = []
+    for ch, b in rows:
+        out.append(
+            DictaminadorChapterOut(
+                id=int(ch.id),
+                title=ch.title,
+                status=str(ch.status),
+                updated_at=ch.updated_at.isoformat() if ch.updated_at else "",
+
+                file_path=getattr(ch, "file_path", None),
+                book_name=b.name if b else None,
+                author_name=getattr(ch, "author_name", None),
+                author_email=getattr(ch, "author_email", None),
+
+                deadline_at=ch.deadline_at.isoformat() if getattr(ch, "deadline_at", None) else None,
+                deadline_stage=getattr(ch, "deadline_stage", None),
+
+                # ✅ NUEVO
+                author_deadline_at=ch.author_deadline_at.isoformat() if getattr(ch, "author_deadline_at", None) else None,
+            )
         )
-        .join(Book, Book.id == Chapter.book_id)
-        .filter(
-            Chapter.id == chapter_id,
-            Chapter.evaluator_id == dictaminador.id
-        )
-        .first()
-    )
-    
-    if not c:
-        raise HTTPException(status_code=404, detail="Capítulo no encontrado o no asignado a ti")
-    
-    today = date.today()
-    days_remaining = None
-    is_overdue = False
-    
-    if c.deadline_at:
-        if isinstance(c.deadline_at, datetime):
-            deadline_date = c.deadline_at.date()
-        else:
-            deadline_date = c.deadline_at
-        days_remaining = (deadline_date - today).days
-        is_overdue = days_remaining < 0
-    
-    return DictaminadorChapterOut(
-        id=c.id,
-        title=c.title,
-        status=c.status,
-        updated_at=str(c.updated_at),
-        file_path=c.file_path,
-        book_name=c.book_name,
-        author_name=c.author_name,
-        author_email=c.author_email,
-        deadline_at=str(c.deadline_at) if c.deadline_at else None,
-        deadline_stage=c.deadline_stage,
-        days_remaining=days_remaining,
-        is_overdue=is_overdue
-    )
+
+    return out
+
 
 # =========================
-# GET /dictaminador/chapters/{chapter_id}/view-latest
+# PATCH /dictaminador/chapters/{id}/status
 # =========================
-@router.get("/chapters/{chapter_id}/view-latest")
-def view_latest_file(
-    chapter_id: int,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user)
-):
-    """Ver el último archivo del capítulo en el navegador"""
-    dictaminador = _require_dictaminador(db, user)
-    
-    chapter = db.query(Chapter).filter(
-        Chapter.id == chapter_id,
-        Chapter.evaluator_id == dictaminador.id
-    ).first()
-    
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Capítulo no encontrado")
-    
-    # Determinar qué archivo mostrar (el más reciente)
-    file_path = chapter.corrected_file_path or chapter.file_path
-    
-    if not file_path:
-        raise HTTPException(status_code=404, detail="No hay archivo disponible")
-    
-    from fastapi.responses import FileResponse
-    import os
-    
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Archivo no encontrado en el servidor")
-    
-    return FileResponse(
-        file_path,
-        media_type="application/octet-stream",
-        filename=os.path.basename(file_path)
-    )
-
-# =========================
-# GET /dictaminador/chapters/{chapter_id}/download-latest
-# =========================
-@router.get("/chapters/{chapter_id}/download-latest")
-def download_latest_file(
-    chapter_id: int,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user)
-):
-    """Descargar el último archivo del capítulo"""
-    dictaminador = _require_dictaminador(db, user)
-    
-    chapter = db.query(Chapter).filter(
-        Chapter.id == chapter_id,
-        Chapter.evaluator_id == dictaminador.id
-    ).first()
-    
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Capítulo no encontrado")
-    
-    file_path = chapter.corrected_file_path or chapter.file_path
-    
-    if not file_path:
-        raise HTTPException(status_code=404, detail="No hay archivo disponible")
-    
-    from fastapi.responses import FileResponse
-    import os
-    
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Archivo no encontrado en el servidor")
-    
-    return FileResponse(
-        file_path,
-        media_type="application/octet-stream",
-        filename=os.path.basename(file_path),
-        headers={"Content-Disposition": f"attachment; filename={os.path.basename(file_path)}"}
-    )
-
-# =========================
-# PATCH /dictaminador/chapters/{chapter_id}/status
-# =========================
-@router.patch("/chapters/{chapter_id}/status")
-def update_chapter_status(
+@router.patch("/chapters/{chapter_id}/status", response_model=DictaminadorChapterOut)
+def update_status(
     chapter_id: int,
     payload: StatusUpdateIn,
     db: Session = Depends(get_db),
-    user=Depends(get_current_user)
+    user=Depends(get_current_user),
 ):
-    """Actualizar estado de un capítulo"""
-    dictaminador = _require_dictaminador(db, user)
-    
-    chapter = db.query(Chapter).filter(
-        Chapter.id == chapter_id,
-        Chapter.evaluator_id == dictaminador.id
-    ).first()
-    
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Capítulo no encontrado")
-    
-    chapter.status = payload.status
-    chapter.updated_at = datetime.now()
-    
-    # Si hay comentario, podrías guardarlo en un historial
-    if payload.comment and hasattr(chapter, 'history'):
-        from app.models.chapter_history import ChapterHistory
-        history = ChapterHistory(
-            chapter_id=chapter.id,
-            by=dictaminador.name,
-            action=f"Cambio de estado a {payload.status}",
-            detail=payload.comment,
-            at=datetime.now()
+    me = _require_dictaminador(db, user)
+
+    new_status = (payload.status or "").strip().upper()
+    if new_status not in (
+        "EN_REVISION",
+        "CORRECCIONES",
+        "APROBADO",
+        "RECHAZADO",
+        "EN_REVISION_DICTAMINADOR",
+        "CORRECCIONES_SOLICITADAS_A_AUTOR",
+        "REENVIADO_POR_AUTOR",
+        "REVISADO_POR_EDITORIAL",
+        "LISTO_PARA_FIRMA",
+        "FIRMADO",
+        "ASIGNADO_A_DICTAMINADOR",
+        "ENVIADO_A_DICTAMINADOR",
+        "RECIBIDO",
+    ):
+        raise HTTPException(status_code=400, detail="Estado inválido")
+
+    ch = (
+        db.query(Chapter)
+        .filter(Chapter.id == chapter_id, Chapter.evaluator_id == me.id)
+        .first()
+    )
+    if not ch:
+        raise HTTPException(status_code=404, detail="Capítulo no encontrado o no asignado a ti")
+
+    # comentario obligatorio para correcciones / rechazo (como tú lo manejas en UI)
+    comment = (payload.comment or "").strip()
+    if new_status in ("CORRECCIONES", "RECHAZADO") and not comment:
+        raise HTTPException(status_code=400, detail="Escribe el comentario")
+
+    # ✅ actualiza status
+    ch.status = new_status
+    ch.updated_at = datetime.utcnow()
+
+    # ✅ NUEVO: si el dictaminador manda author_deadline_at, guardarlo
+    if payload.author_deadline_at:
+        try:
+            # acepta "YYYY-MM-DDTHH:MM:SS" (lo que mandas desde frontend)
+            ch.author_deadline_at = datetime.fromisoformat(payload.author_deadline_at.replace("Z", ""))
+            ch.author_deadline_set_at = datetime.utcnow()
+            ch.author_deadline_set_by = int(me.id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="author_deadline_at inválido (usa ISO, ej: 2026-03-10T23:59:59)")
+
+    # guardar historial (opcional pero recomendado)
+    if comment:
+        db.add(
+            ChapterHistory(
+                chapter_id=int(ch.id),
+                by=me.name,
+                action=f"DICTAMINADOR_STATUS_{new_status}",
+                detail=comment,
+                at=datetime.utcnow(),
+            )
         )
-        db.add(history)
-    
+
+    db.add(ch)
     db.commit()
-    db.refresh(chapter)
-    
-    return {"ok": True, "status": chapter.status}
+    db.refresh(ch)
+
+    b = db.query(Book).filter(Book.id == ch.book_id).first()
+
+    return DictaminadorChapterOut(
+        id=int(ch.id),
+        title=ch.title,
+        status=str(ch.status),
+        updated_at=ch.updated_at.isoformat() if ch.updated_at else "",
+
+        file_path=getattr(ch, "file_path", None),
+        book_name=b.name if b else None,
+        author_name=getattr(ch, "author_name", None),
+        author_email=getattr(ch, "author_email", None),
+
+        deadline_at=ch.deadline_at.isoformat() if getattr(ch, "deadline_at", None) else None,
+        deadline_stage=getattr(ch, "deadline_stage", None),
+
+        # ✅ NUEVO
+        author_deadline_at=ch.author_deadline_at.isoformat() if getattr(ch, "author_deadline_at", None) else None,
+    )
+
+
+# =========================
+# GET /dictaminador/chapters/{id}/view-latest
+# =========================
+@router.get("/chapters/{chapter_id}/view-latest")
+def view_latest(chapter_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    me = _require_dictaminador(db, user)
+
+    ch = (
+        db.query(Chapter)
+        .filter(Chapter.id == chapter_id, Chapter.evaluator_id == me.id)
+        .first()
+    )
+    if not ch:
+        raise HTTPException(status_code=404, detail="Capítulo no encontrado o no asignado a ti")
+
+    latest = _pick_latest_file_path(ch)
+    if not latest:
+        raise HTTPException(status_code=404, detail="Este capítulo no tiene archivo")
+
+    physical = _resolve_physical_path(latest)
+    if not physical or not os.path.exists(physical):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado en el servidor")
+
+    ext = os.path.splitext(physical)[1] or ".bin"
+    return FileResponse(
+        path=physical,
+        media_type=_guess_media_type(ext),
+        headers={"Content-Disposition": f'inline; filename="{os.path.basename(physical)}"'},
+    )
+
+
+# =========================
+# GET /dictaminador/chapters/{id}/download-latest
+# =========================
+@router.get("/chapters/{chapter_id}/download-latest")
+def download_latest(chapter_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    me = _require_dictaminador(db, user)
+
+    ch = (
+        db.query(Chapter)
+        .filter(Chapter.id == chapter_id, Chapter.evaluator_id == me.id)
+        .first()
+    )
+    if not ch:
+        raise HTTPException(status_code=404, detail="Capítulo no encontrado o no asignado a ti")
+
+    latest = _pick_latest_file_path(ch)
+    if not latest:
+        raise HTTPException(status_code=404, detail="Este capítulo no tiene archivo")
+
+    physical = _resolve_physical_path(latest)
+    if not physical or not os.path.exists(physical):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado en el servidor")
+
+    ext = os.path.splitext(physical)[1] or ".bin"
+    return FileResponse(
+        path=physical,
+        media_type=_guess_media_type(ext),
+        filename=os.path.basename(physical),
+        headers={"Content-Disposition": f'attachment; filename="{os.path.basename(physical)}"'},
+    )
