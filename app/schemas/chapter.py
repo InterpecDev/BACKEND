@@ -1,6 +1,5 @@
-# app/schemas/chapter.py
-
 from pydantic import BaseModel
+from datetime import datetime
 from typing import Optional, Literal
 from datetime import datetime
 
@@ -8,14 +7,14 @@ from datetime import datetime
 ChapterStatus = Literal[
     "RECIBIDO",
     "ASIGNADO_A_DICTAMINADOR",
-    "ENVIADO_A_DICTAMINADOR",
-    "EN_REVISION_DICTAMINADOR",
-    "CORRECCIONES_SOLICITADAS_A_AUTOR",
+    "ENVIADO_A_DICTAMINADOR",           # ← NUEVO
+    "EN_REVISION_DICTAMINADOR",          # ← NUEVO
+    "CORRECCIONES_SOLICITADAS_A_AUTOR",  # ← NUEVO
     "CORRECCIONES",
     "REENVIADO_POR_AUTOR",
-    "REVISADO_POR_EDITORIAL",
-    "LISTO_PARA_FIRMA",
-    "FIRMADO",
+    "REVISADO_POR_EDITORIAL",            # ← NUEVO
+    "LISTO_PARA_FIRMA",                  # ← NUEVO
+    "FIRMADO",                           # ← NUEVO
     "EN_REVISION",
     "APROBADO",
     "RECHAZADO",
@@ -26,30 +25,15 @@ class ChapterOut(BaseModel):
     book_id: int
     author_id: int
     title: str
-    status: ChapterStatus
-
-    # ✅ archivo + fechas
+    status: ChapterStatus  # ← Ahora acepta todos
+    #updated_at: datetime
     file_path: Optional[str] = None
+    
+     # ✅ CAMBIO: datetime para que FastAPI lo serialice a ISO automáticamente
     updated_at: Optional[datetime] = None
-
-    # ✅ si tu modelo ya maneja correcciones
-    corrected_file_path: Optional[str] = None
-    corrected_updated_at: Optional[datetime] = None
-
-    # ==========================================================
-    # ✅ DEADLINE Editorial -> Dictaminador (si lo usas)
-    # ==========================================================
-    deadline_stage: Optional[str] = None
-    deadline_at: Optional[datetime] = None
-    deadline_set_at: Optional[datetime] = None
-    deadline_set_by: Optional[int] = None
-
-    # ==========================================================
-    # ✅ DEADLINE Dictaminador -> Autor (ESTO ES LO IMPORTANTE)
-    # ==========================================================
+    # ✅ CAMBIO: datetime para que no explote
     author_deadline_at: Optional[datetime] = None
-    author_deadline_set_at: Optional[datetime] = None
-    author_deadline_set_by: Optional[int] = None
+
 
     class Config:
         from_attributes = True
