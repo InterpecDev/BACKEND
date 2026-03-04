@@ -1,8 +1,10 @@
-# app/models/chapter.py
 from datetime import datetime
 from sqlalchemy import Column, BigInteger, String, DateTime, ForeignKey, Enum
 from sqlalchemy.orm import relationship
 from app.db.session import Base
+from sqlalchemy import Column, String
+from sqlalchemy import Column, DateTime
+
 
 CHAPTER_STATUSES = (
     "RECIBIDO",
@@ -44,49 +46,52 @@ class Chapter(Base):
     evaluator_id = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     evaluator_name = Column(String(255), nullable=True)
     evaluator_email = Column(String(255), nullable=True)
-
-    # =========================
-    # DEADLINES: Editorial -> Dictaminador
-    # =========================
+    
+        # ✅ DEADLINES (nuevo)
     deadline_stage = Column(String(50), nullable=True)
     deadline_at = Column(DateTime, nullable=True)
     deadline_set_at = Column(DateTime, nullable=True)
     deadline_set_by = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
+    # (opcional) relación al usuario que la puso
     deadline_setter = relationship("User", foreign_keys=[deadline_set_by])
-
-    # =========================
-    # DEADLINE: Dictaminador -> Autor (Correcciones)
-    # =========================
+    
+        # ✅ DEADLINE DICTAMINADOR -> AUTOR (nuevo, independiente)
     author_deadline_at = Column(DateTime, nullable=True)
+    
     author_deadline_set_at = Column(DateTime, nullable=True)
     author_deadline_set_by = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
+    # (opcional) relación al usuario que la puso (dictaminador)
     author_deadline_setter = relationship("User", foreign_keys=[author_deadline_set_by])
+    
 
     folio = Column(String(50), nullable=True, unique=True, index=True)
 
     book = relationship("Book", back_populates="chapters")
 
+    # ✅ relación con dictámenes
     dictamenes = relationship("Dictamen", back_populates="chapter", cascade="all, delete-orphan")
 
+    # ✅ Versiones del capítulo
     versions = relationship(
         "ChapterVersion",
         back_populates="chapter",
         cascade="all, delete-orphan",
         order_by="ChapterVersion.uploaded_at.desc()",
     )
-
+    
+    # ✅ NUEVO: Agregar relación con ChapterHistory (Solo esto es nuevo)
     history = relationship(
         "ChapterHistory",
         back_populates="chapter",
         cascade="all, delete-orphan",
         order_by="ChapterHistory.at.desc()",
     )
-
     deadlines = relationship(
         "ChapterDeadline",
         back_populates="chapter",
         cascade="all, delete-orphan",
         order_by="ChapterDeadline.created_at.desc()",
     )
+    
