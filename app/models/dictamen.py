@@ -8,14 +8,13 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from app.db.session import Base
-from sqlalchemy import Integer
-
-# ✅ NUEVO IMPORT (solo esto)
 from sqlalchemy.dialects.mysql import JSON
+
+from app.db.session import Base
 
 DICTAMEN_TIPOS = ("INVESTIGACION", "DOCENCIA")
 DICTAMEN_DECISIONS = ("APROBADO", "CORRECCIONES", "RECHAZADO")
@@ -31,18 +30,19 @@ class Dictamen(Base):
     chapter_id = Column(Integer, ForeignKey("chapters.id"), nullable=False, index=True)
     evaluador_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
 
-    # ✅ CAMBIO MINIMO: BD ahora es VARCHAR(80)
     tipo = Column(String(80), nullable=False)
 
-    # ✅ Deja estos igual (tu BD sigue siendo ENUM para estos)
     decision = Column(Enum(*DICTAMEN_DECISIONS, name="dictamen_decision"), nullable=False)
-    status = Column(Enum(*DICTAMEN_STATUS, name="dictamen_status"), nullable=False, server_default="BORRADOR")
+    status = Column(
+        Enum(*DICTAMEN_STATUS, name="dictamen_status"),
+        nullable=False,
+        server_default="BORRADOR",
+    )
 
     promedio = Column(DECIMAL(3, 1), nullable=True)
     comentarios = Column(Text, nullable=True)
     conflicto_interes = Column(Text, nullable=True)
 
-    # ✅ NUEVOS CAMPOS (DictamenDocumento)
     template_docx_path = Column(String(500), nullable=True)
     recipient_name = Column(String(180), nullable=True)
     constancia_data_json = Column(JSON, nullable=True)
@@ -57,6 +57,13 @@ class Dictamen(Base):
 
     chapter = relationship("Chapter", back_populates="dictamenes")
     evaluador = relationship("User")
+
+    criterios = relationship(
+        "DictamenCriterio",
+        back_populates="dictamen",
+        cascade="all, delete-orphan",
+        order_by="DictamenCriterio.id.asc()",
+    )
 
     __table_args__ = (
         Index("idx_dictamen_chapter", "chapter_id"),
