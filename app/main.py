@@ -23,19 +23,15 @@ import app.models
 
 app = FastAPI()
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-
-    "https://editorial-ten.vercel.app",
-    "https://frontend-6whf-git-main-luz1727s-projects.vercel.app",
-    "https://editorial-git-main-interpecdevs-projects.vercel.app",
-    "https://editorial-8s5chffq0-interpecdevs-projects.vercel.app",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://editorial-ten.vercel.app",
+        "https://editorial-git-main-interpecdevs-projects.vercel.app",
+        "https://editorial-8s5chffq0-interpecdevs-projects.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
