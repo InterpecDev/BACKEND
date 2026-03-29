@@ -7,6 +7,7 @@ DictamenStatus = Literal["BORRADOR", "GENERADO", "FIRMADO"]
 class AdminDictamenDocumentoOut(BaseModel):
     id: int
     folio: str
+    chapterFolio: Optional[str] = None  # ✅ nuevo
     status: DictamenStatus
 
     template_docx_path: Optional[str] = None
@@ -20,6 +21,10 @@ class AdminDictamenDocumentoOut(BaseModel):
     capitulo: str
     libro: str
     evaluador: str
+    
+    #NUEVOS
+    evaluador_institucion: str | None = None
+    evaluador_cvo_snii: str | None = None
 
 
 class AdminDictamenDocumentoUpdateIn(BaseModel):

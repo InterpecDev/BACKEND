@@ -74,10 +74,17 @@ def build_detail(db: Session, d: Dictamen) -> AdminDictamenDocumentoOut:
 
     ev = db.query(User).filter(User.id == d.evaluador_id).first()
     evaluador_name = ev.name if ev else "—"
+    
+    
+    #NUEVOS
+    evaluador_institucion = ev.institution if ev else None
+    evaluador_cvo_snii = ev.cvo_snii if ev else None
+
 
     return AdminDictamenDocumentoOut(
         id=int(d.id),
         folio=d.folio,
+        chapterFolio=getattr(ch, "folio", None),  # ✅ folio del capítulo
         status=d.status,
 
         template_docx_path=d.template_docx_path,
@@ -91,6 +98,10 @@ def build_detail(db: Session, d: Dictamen) -> AdminDictamenDocumentoOut:
         capitulo=ch.title,
         libro=libro_name,
         evaluador=evaluador_name,
+        
+        # ✅ nuevos
+    evaluador_institucion=evaluador_institucion,
+    evaluador_cvo_snii=evaluador_cvo_snii,
     )
 
 
