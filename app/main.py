@@ -34,10 +34,10 @@ app.add_middleware(
         "http://127.0.0.1:5173",
 
         # ✅ SOLO ORIGIN (sin /login)
-        "https://frontend-6whf.vercel.app",
-        "https://frontend-luz1727s-projects.vercel.app",
-        "https://frontend-6whf-git-main-luz1727s-projects.vercel.app",
-        "https://frontend-6whf-bnpneq3m6-luz1727s-projects.vercel.app",
+        "https://editorial-ten.vercel.app",
+       # "https://frontend-luz1727s-projects.vercel.app",
+       # "https://frontend-6whf-git-main-luz1727s-projects.vercel.app",
+       # "https://frontend-6whf-bnpneq3m6-luz1727s-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
