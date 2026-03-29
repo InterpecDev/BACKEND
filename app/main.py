@@ -35,9 +35,9 @@ app.add_middleware(
 
         # ✅ SOLO ORIGIN (sin /login)
         "https://editorial-ten.vercel.app",
-       # "https://frontend-luz1727s-projects.vercel.app",
-       # "https://frontend-6whf-git-main-luz1727s-projects.vercel.app",
-       # "https://frontend-6whf-bnpneq3m6-luz1727s-projects.vercel.app",
+    # "https://frontend-luz1727s-projects.vercel.app",
+        "editorial-git-main-interpecdevs-projects.vercel.app",
+        "editorial-8s5chffq0-interpecdevs-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
